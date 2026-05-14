@@ -1,0 +1,39 @@
+model: timm_baseline
+
+data:
+  image_dir: data/image
+  mask_dir: data/mask
+  label_csv: data/label.csv
+  output_dir: outputs
+
+timm:
+  # 可选模型举例:
+  # - efficientnet_b0
+  # - resnet18
+  # - vit_base_patch16_224
+  # - samvit_base_patch16
+
+  model_name: efficientnet_b0
+  pretrained: true
+  dropout: 0.0
+  img_size: 224
+  use_mask_crop: true
+  mask_threshold: 127
+  mask_padding: 4
+  normalize: true
+
+  batch_size: 32
+  num_workers: 4
+  num_epochs: 50
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+  label_smoothing: 0.0
+  patience: 7
+  monitor_metric: macro_f1
+  seed: 42
+
+  split:
+    train_size: 0.7
+    val_size: 0.1
+    test_size: 0.2
+    random_state: 42

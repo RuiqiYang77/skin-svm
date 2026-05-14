@@ -9,3 +9,6 @@ seaborn
 PyYAML
 joblib
 tqdm
+torch
+torchvision
+timm

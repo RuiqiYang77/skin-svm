@@ -27,15 +27,22 @@ src/
     split.py
   model/
     svm.py
+  timm_baseline/
+    data.py
+    engine.py
+    model.py
   utils/
     config.py
     evaluation.py
     io.py
   train.py
   predict.py
+  train_timm.py
+  predict_timm.py
 
 outputs/
   {experiment_id}/
+  timm_{experiment_id}/
 ```
 
 ## 环境配置
@@ -85,6 +92,97 @@ outputs/{experiment_id}/model.joblib
 ```
 
 并输出单张图像的预测类别和各类别概率。
+
+## 迁移学习基线
+
+这部分是一个独立的 timm 深度学习基线，用来和 SVM 主线做对比。
+
+目的：
+
+- 复用当前项目的 `data/label.csv`、`data/image/` 和 `data/mask/`
+- 用预训练 timm 模型做端到端微调
+- 保留和经典算法类似的输出结构，方便比较
+- 和 SVM 主线完全分开，不共享输出目录或中间文件
+
+你可以把它理解成“同一份数据，不同方法”的对照组，适合写报告、做消融和比较模型路线。
+
+训练命令：
+
+```text
+python src/train_timm.py --config config/timm_baseline.yaml --experiment_id exp001
+```
+
+这条命令适合只跑一个默认模型。默认模型名写在 [config/timm_baseline.yaml](config/timm_baseline.yaml) 里，当前是 `efficientnet_b0`。
+
+如果你只想快速验证这条基线是否能跑通，先用这条单模型命令即可。
+
+如果要一次跑 4 个 timm 模型做对比，可以直接用批量脚本：
+
+```text
+python src/train_timm_suite.py --config config/timm_baseline.yaml --experiment_id exp001
+```
+
+默认会依次跑这 4 个模型：
+
+```text
+efficientnet_b0
+resnet18
+vit_base_patch16_224
+samvit_base_patch16
+```
+
+每个模型都会有自己独立的输出目录，最终汇总会写到：
+
+```text
+outputs/timm_exp001/suite_summary.csv
+```
+
+如果你只想跑其中一部分，也可以显式传入模型名，例如：
+
+```text
+python src/train_timm_suite.py --config config/timm_baseline.yaml --experiment_id exp001 --models efficientnet_b0 resnet18
+```
+
+这会跳过其余模型，只跑你指定的子集。批量脚本会重用同一个训练流程，只是把 `model_name` 替换成你给定的架构名，所以所有模型的指标和输出格式是一致的，方便横向比较。
+
+预测命令：
+
+```text
+python src/predict_timm.py --config config/timm_baseline.yaml --experiment_id exp001 --image_path data/image/1.jpg --mask_path data/mask/mask_1.jpg
+```
+
+输出会保存在：
+
+```text
+outputs/timm_exp001/
+  config.yaml
+  metadata.csv
+  split.csv
+  history.csv
+  model_best.pth
+  metrics.json
+  predictions.csv
+  robustness_detail.csv
+  classification_report.txt
+  confusion_matrix.png
+  single_prediction.csv
+```
+
+其中：
+
+- `history.csv` 记录每个 epoch 的训练和验证变化
+- `metrics.json` 保存 train / val / test 的汇总指标
+- `predictions.csv` 保存每个样本的逐行预测结果
+- `robustness_detail.csv` 保存增强组的一致性明细
+- `classification_report.txt` 和 `confusion_matrix.png` 是 test 集的最终汇报结果
+
+默认配置文件是：
+
+```text
+config/timm_baseline.yaml
+```
+
+里面保留了和经典算法类似的训练/验证/测试拆分、早停、混淆矩阵、分类报告和鲁棒性统计，但输出目录和脚本名称都和 SVM 主线区分开了，方便做对比分析。
 
 ## 配置
 
