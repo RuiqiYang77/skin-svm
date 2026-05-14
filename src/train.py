@@ -29,6 +29,33 @@ from src.utils.evaluation import (
 from src.utils.io import ensure_dir, save_json
 
 
+def _print_split_summary(metrics, labels):
+    print("Split summary (accuracy / balanced_acc / macro_f1):")
+    for split_name in ["train", "val", "test"]:
+        split_metrics = metrics[split_name]
+        print(
+            f"  {split_name:5s}  "
+            f"acc={split_metrics['accuracy']:.4f}  "
+            f"bal_acc={split_metrics['balanced_accuracy']:.4f}  "
+            f"macro_f1={split_metrics['macro_f1']:.4f}"
+        )
+
+    test_report = metrics["test"]["classification_report"]
+    recall_parts = []
+    for label in labels:
+        label_report = test_report.get(label, {})
+        if "recall" in label_report:
+            recall_parts.append(f"{label}={label_report['recall']:.4f}")
+    if recall_parts:
+        print("Test class recall: " + ", ".join(recall_parts))
+
+    robustness = metrics["test"].get("augmentation_robustness", {})
+    if robustness:
+        consistency = robustness.get("prediction_consistency")
+        if consistency is not None:
+            print(f"Test augmentation consistency: {consistency:.4f}")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train the SVM lesion classifier.")
     parser.add_argument("--config", required=True, help="Path to YAML config.")
@@ -115,8 +142,7 @@ def main():
     save_model_bundle(model, feature_columns, output_dir / "model.joblib")
 
     print(f"Experiment finished: {output_dir}")
-    print(f"Test macro F1: {metrics['test']['macro_f1']:.4f}")
-    print(f"Test balanced accuracy: {metrics['test']['balanced_accuracy']:.4f}")
+    _print_split_summary(metrics, labels)
 
 
 if __name__ == "__main__":
