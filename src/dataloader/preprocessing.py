@@ -13,10 +13,14 @@ def load_image_and_mask(image_path, mask_path, config):
             f"vs {mask_path} {mask.shape[:2]}"
         )
 
-    threshold = config["svm"]["features"].get("mask_threshold", 127)
+    model_key = config["model"]
+    feature_cfg = config[model_key]["features"]
+    prep_cfg = config[model_key]["preprocessing"]
+
+    threshold = feature_cfg.get("mask_threshold", 127)
     binary_mask = mask > threshold
 
-    if config["svm"]["preprocessing"].get("morphology", False):
+    if prep_cfg.get("morphology", False):
         footprint = morphology.square(3)
         binary_mask = morphology.binary_opening(binary_mask, footprint)
         binary_mask = morphology.binary_closing(binary_mask, footprint)
@@ -24,7 +28,7 @@ def load_image_and_mask(image_path, mask_path, config):
     if not binary_mask.any():
         raise ValueError(f"Empty lesion mask: {mask_path}")
 
-    if config["svm"]["preprocessing"].get("normalize", True):
+    if prep_cfg.get("normalize", True):
         image = image.astype(np.float32) / 255.0
     else:
         image = image.astype(np.float32)

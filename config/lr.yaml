@@ -1,0 +1,45 @@
+model: logistic_regression
+
+data:
+  image_dir: data/image
+  mask_dir: data/mask
+  label_csv: data/label.csv
+  output_dir: outputs
+
+logistic_regression:
+  split:
+    train_size: 0.7
+    val_size: 0.1
+    test_size: 0.2
+    random_state: 42
+    group_by: base_id
+
+  features:
+    use_color: true
+    use_texture: true
+    use_shape: true
+    use_hog: false
+    mask_threshold: 127
+    hsv_hist_bins: 16
+    lbp_points: 24
+    lbp_radius: 3
+
+  preprocessing:
+    normalize: true
+    morphology: false
+
+  model:
+    penalty: l2
+    C: 1.0
+    class_weight: balanced
+    random_state: 42
+    max_iter: 1000
+    solver: lbfgs
+    n_jobs: 1
+
+  grid_search:
+    enabled: true
+    cv: 5
+    n_jobs: 1
+    scoring: f1_macro
+    C: [0.01, 0.1, 1, 10, 100]

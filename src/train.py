@@ -6,6 +6,7 @@
 # --experiment_id: 实验编号，所有输出会保存到 outputs/{experiment_id}/
 
 import argparse
+import importlib
 import sys
 from pathlib import Path
 
@@ -18,7 +19,6 @@ if str(ROOT) not in sys.path:
 from src.dataloader.dataset import build_metadata, validate_metadata
 from src.dataloader.features import extract_feature_table
 from src.dataloader.split import create_grouped_split, split_features
-from src.model.svm import save_model_bundle, train_svm
 from src.utils.config import load_config, save_config
 from src.utils.evaluation import (
     augmentation_robustness,
@@ -48,8 +48,13 @@ def parse_args():
 def main():
     args = parse_args()
     config = load_config(args.config)
-    if config.get("model") != "svm":
-        raise ValueError("This training entry currently supports model: svm only.")
+
+    model_name = config.get("model")
+    if model_name is None:
+        raise ValueError("Config must specify a 'model' field.")
+    model_module = importlib.import_module(f"src.model.{model_name}")
+    train_func = getattr(model_module, f"train_{model_name}")
+    save_model_bundle = getattr(model_module, "save_model_bundle")
 
     output_dir = ensure_dir(Path(config["data"]["output_dir"]) / args.experiment_id)
     save_config(config, output_dir / "config.yaml")
@@ -73,7 +78,7 @@ def main():
     X_test, y_test, test_meta = split_data["test"]
 
     feature_columns = X_train.columns.tolist()
-    model = train_svm(
+    model = train_func(
         X_train,
         y_train,
         groups=train_meta["base_id"].to_numpy(),

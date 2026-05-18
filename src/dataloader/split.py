@@ -3,7 +3,7 @@ from sklearn.model_selection import train_test_split
 
 
 def create_grouped_split(df, config):
-    split_cfg = config["svm"]["split"]
+    split_cfg = config[config["model"]]["split"]
     train_size = split_cfg.get("train_size", 0.8)
     val_size = split_cfg.get("val_size", 0.1)
     test_size = split_cfg.get("test_size", 0.1)

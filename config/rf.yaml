@@ -1,0 +1,46 @@
+model: random_forest
+
+data:
+  image_dir: data/image
+  mask_dir: data/mask
+  label_csv: data/label.csv
+  output_dir: outputs
+
+random_forest:
+  split:
+    train_size: 0.7
+    val_size: 0.1
+    test_size: 0.2
+    random_state: 42
+    group_by: base_id
+
+  features:
+    use_color: true
+    use_texture: true
+    use_shape: true
+    use_hog: false
+    mask_threshold: 127
+    hsv_hist_bins: 16
+    lbp_points: 24
+    lbp_radius: 3
+
+  preprocessing:
+    normalize: true
+    morphology: false
+
+  model:
+    n_estimators: 100
+    max_depth: null
+    min_samples_split: 2
+    min_samples_leaf: 1
+    class_weight: balanced
+    random_state: 42
+    n_jobs: -1
+
+  grid_search:
+    enabled: true
+    cv: 5
+    n_jobs: 1
+    scoring: f1_macro
+    n_estimators: [50, 100, 200]
+    max_depth: [null, 10, 20, 30]

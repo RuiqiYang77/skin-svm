@@ -21,7 +21,7 @@ from src.dataloader.preprocessing import crop_to_mask, load_image_and_mask
 def extract_features(image_path, mask_path, config):
     image, mask = load_image_and_mask(image_path, mask_path, config)
     features = {}
-    feature_cfg = config["svm"]["features"]
+    feature_cfg = config[config["model"]]["features"]
 
     if feature_cfg.get("use_color", True):
         features.update(_color_features(image, mask, feature_cfg))
