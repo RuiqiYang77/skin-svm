@@ -18,7 +18,7 @@ from skimage.morphology import disk
 from skimage.transform import resize
 from tqdm import tqdm
 
-from src.dataloader.preprocessing import crop_to_mask, load_image_and_mask
+from src.dataloader.preprocessing_v4_xlc import crop_to_mask, load_image_and_mask
 
 
 # ---------------------------------------------------------------------------

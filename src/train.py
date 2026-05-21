@@ -6,6 +6,7 @@
 # --experiment_id: 实验编号，所有输出会保存到 outputs/{experiment_id}/
 
 import argparse
+import importlib
 import sys
 from pathlib import Path
 
@@ -16,7 +17,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.dataloader.dataset import build_metadata, validate_metadata
-from src.dataloader.features import extract_feature_table
 from src.dataloader.split import create_grouped_split, split_features
 from src.model.svm import save_model_bundle, train_svm
 from src.utils.config import load_config, save_config
@@ -42,6 +42,11 @@ def parse_args():
         action="store_true",
         help="Reuse outputs/{experiment_id}/features.csv when it exists.",
     )
+    parser.add_argument(
+        "--features_module",
+        default="src.dataloader.features",
+        help="Python module path for feature extraction (e.g. src.dataloader.features_xlc).",
+    )
     return parser.parse_args()
 
 
@@ -53,6 +58,9 @@ def main():
 
     output_dir = ensure_dir(Path(config["data"]["output_dir"]) / args.experiment_id)
     save_config(config, output_dir / "config.yaml")
+
+    features_mod = importlib.import_module(args.features_module)
+    extract_feature_table = features_mod.extract_feature_table
 
     metadata = build_metadata(config)
     validate_metadata(metadata)
