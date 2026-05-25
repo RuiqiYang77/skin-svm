@@ -191,16 +191,22 @@ def main():
     final["robustness_detail"].to_csv(output_dir / "robustness_detail.csv", index=False)
     save_json(final["metrics"], output_dir / "metrics.json")
     save_model_bundle(final["model"], final["feature_columns"], output_dir / "model.joblib")
-    save_confusion_matrix(
-        final["test_predictions"]["label"],
-        final["test_predictions"]["pred_label"],
-        labels,
-        output_dir / "confusion_matrix.png",
-    )
+
+    has_test = not final["test_predictions"].empty
+    if has_test:
+        save_confusion_matrix(
+            final["test_predictions"]["label"],
+            final["test_predictions"]["pred_label"],
+            labels,
+            output_dir / "confusion_matrix.png",
+        )
 
     print(f"Experiment finished: {output_dir}")
-    print(f"Test macro F1: {final['metrics']['test']['macro_f1']:.4f}")
-    print(f"Test balanced accuracy: {final['metrics']['test']['balanced_accuracy']:.4f}")
+    if has_test:
+        print(f"Test macro F1: {final['metrics']['test']['macro_f1']:.4f}")
+        print(f"Test balanced accuracy: {final['metrics']['test']['balanced_accuracy']:.4f}")
+    else:
+        print(f"Val macro F1: {final['metrics']['val']['macro_f1']:.4f}")
 
 
 if __name__ == "__main__":
