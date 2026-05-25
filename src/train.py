@@ -18,7 +18,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.dataloader.dataset import build_metadata, validate_metadata
-from src.dataloader.features import extract_feature_table
 from src.dataloader.split import create_grouped_split, split_features
 from src.utils.config import load_config, save_config
 from src.utils.evaluation import (
@@ -43,6 +42,11 @@ def parse_args():
         action="store_true",
         help="Reuse outputs/{experiment_id}/features.csv when it exists.",
     )
+    parser.add_argument(
+        "--features_module",
+        default="src.dataloader.features",
+        help="Python module path for feature extraction (e.g. src.dataloader.features_xlc).",
+    )
     return parser.parse_args()
 
 
@@ -58,6 +62,9 @@ def main():
     save_model_bundle = getattr(model_module, "save_model_bundle")
 
     output_dir = ensure_dir(Path(config["data"]["output_dir"]) / args.experiment_id)
+
+    features_mod = importlib.import_module(args.features_module)
+    extract_feature_table = features_mod.extract_feature_table
 
     metadata = build_metadata(config)
     # 检查数据是否有增强（通过是否有任一条目的 augmentation_id 不是 "original"）

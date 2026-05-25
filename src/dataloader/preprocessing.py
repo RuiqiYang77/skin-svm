@@ -28,6 +28,34 @@ def load_image_and_mask(image_path, mask_path, config):
     if not binary_mask.any():
         raise ValueError(f"Empty lesion mask: {mask_path}")
 
+    if prep_cfg.get("clahe", False):
+        # CLAHE contrast enhancement on Lab L-channel
+        from skimage import color as sk_color, exposure
+
+        lab = sk_color.rgb2lab(image)
+        L = lab[:, :, 0] / 100.0  # normalise L to [0, 1]
+        kernel = prep_cfg.get("clahe_kernel", 12)
+        clip = prep_cfg.get("clahe_clip", 0.03)
+        L_eq = exposure.equalize_adapthist(L, kernel_size=(kernel, kernel), clip_limit=clip)
+        lab[:, :, 0] = L_eq * 100.0
+        image = np.clip(sk_color.lab2rgb(lab) * 255.0, 0, 255).astype(np.uint8)
+
+    if prep_cfg.get("color_normalize", False):
+        # Shades of Gray color constancy (Minkowski norm p=6 for skin images)
+        image = image.astype(np.float32)
+        p = float(prep_cfg.get("shades_of_gray_p", 6))
+        illuminant = []
+        for c in range(3):
+            L_c = np.power(np.mean(np.power(image[:, :, c].astype(np.float64), p)), 1.0 / p)
+            illuminant.append(L_c)
+        illum_mean = np.mean(illuminant)
+        for c in range(3):
+            if illuminant[c] > 0:
+                image[:, :, c] = np.clip(
+                    image[:, :, c] / illuminant[c] * illum_mean, 0, 255
+                )
+        image = image.astype(np.uint8)
+
     if prep_cfg.get("normalize", True):
         image = image.astype(np.float32) / 255.0
     else:
