@@ -69,11 +69,19 @@ def validate_metadata(df, strict_groups=True):
                 )
 
     if strict_groups:
-        expected = {"original", "aug1", "aug2"}
         for base_id, group in df.groupby("base_id"):
-            actual = set(group["augmentation_id"])
-            if actual != expected:
-                errors.append(f"base_id={base_id} has augmentations {sorted(actual)}")
+            aug_ids = set(group["augmentation_id"])
+            if "original" not in aug_ids:
+                errors.append(f"base_id={base_id} missing original image")
+                continue
+            # 检查同一数据集内增强模式一致（所有 base_id 有相同 augmentations）
+            if "expected_aug_ids" not in dir():
+                expected_aug_ids = aug_ids
+            elif aug_ids != expected_aug_ids:
+                errors.append(
+                    f"base_id={base_id} has augmentations {sorted(aug_ids)}, "
+                    f"expected {sorted(expected_aug_ids)}"
+                )
 
     if errors:
         sample = "\n".join(errors[:20])

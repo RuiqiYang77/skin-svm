@@ -19,3 +19,6 @@ temp/
 .ipynb_checkpoints/
 
 data/
+
+data_expand/
+*.zip

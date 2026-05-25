@@ -6,6 +6,7 @@
 # --experiment_id: 实验编号，所有输出会保存到 outputs/{experiment_id}/
 
 import argparse
+import copy
 import importlib
 import sys
 from pathlib import Path
@@ -57,10 +58,11 @@ def main():
     save_model_bundle = getattr(model_module, "save_model_bundle")
 
     output_dir = ensure_dir(Path(config["data"]["output_dir"]) / args.experiment_id)
-    save_config(config, output_dir / "config.yaml")
 
     metadata = build_metadata(config)
-    validate_metadata(metadata)
+    # 检查数据是否有增强（通过是否有任一条目的 augmentation_id 不是 "original"）
+    has_aug = (metadata["augmentation_id"] != "original").any()
+    validate_metadata(metadata, strict_groups=has_aug)
 
     features_path = output_dir / "features.csv"
     if args.reuse_features and features_path.exists():
@@ -69,59 +71,163 @@ def main():
         features_df = extract_feature_table(metadata, config)
         features_df.to_csv(features_path, index=False)
 
-    split_df = create_grouped_split(metadata, config)
-    split_df.to_csv(output_dir / "split.csv", index=False)
-
-    split_data = split_features(features_df, split_df)
-    X_train, y_train, train_meta = split_data["train"]
-    X_val, y_val, val_meta = split_data["val"]
-    X_test, y_test, test_meta = split_data["test"]
-
-    feature_columns = X_train.columns.tolist()
-    model = train_func(
-        X_train,
-        y_train,
-        groups=train_meta["base_id"].to_numpy(),
-        config=config,
-    )
-
     labels = sorted(metadata["label"].unique().tolist())
-    metrics = {}
-    prediction_frames = []
+    split_search_cfg = config[model_name].get("split_search", {})
 
-    for split_name, X, y, meta in [
-        ("train", X_train, y_train, train_meta),
-        ("val", X_val, y_val, val_meta),
-        ("test", X_test, y_test, test_meta),
-    ]:
-        y_pred = model.predict(X)
-        y_prob = model.predict_proba(X) if hasattr(model, "predict_proba") else None
-        metrics[split_name] = evaluate_predictions(y, y_pred, labels)
-        pred_frame = build_predictions_frame(meta, y_pred, y_prob, model.classes_)
-        pred_frame["split"] = split_name
-        prediction_frames.append(pred_frame)
+    def run_once(config_run):
+        split_df = create_grouped_split(metadata, config_run)
+        split_data = split_features(features_df, split_df)
+        X_train, y_train, train_meta = split_data["train"]
+        X_val, y_val, val_meta = split_data["val"]
+        X_test, y_test, test_meta = split_data["test"]
 
-    predictions = pd.concat(prediction_frames, ignore_index=True)
-    predictions.to_csv(output_dir / "predictions.csv", index=False)
+        feature_columns = X_train.columns.tolist()
+        model = train_func(
+            X_train,
+            y_train,
+            groups=train_meta["base_id"].to_numpy(),
+            config=config_run,
+        )
 
-    test_predictions = predictions[predictions["split"] == "test"].copy()
-    robustness = augmentation_robustness(test_predictions)
-    robustness_detail = robustness.pop("detail")
-    robustness_detail.to_csv(output_dir / "robustness_detail.csv", index=False)
-    metrics["test"]["augmentation_robustness"] = robustness
+        metrics = {}
+        prediction_frames = []
+        for split_name, X, y, meta in [
+            ("train", X_train, y_train, train_meta),
+            ("val", X_val, y_val, val_meta),
+            ("test", X_test, y_test, test_meta),
+        ]:
+            y_pred = model.predict(X)
+            y_prob = model.predict_proba(X) if hasattr(model, "predict_proba") else None
+            metrics[split_name] = evaluate_predictions(y, y_pred, labels)
+            pred_frame = build_predictions_frame(meta, y_pred, y_prob, model.classes_)
+            pred_frame["split"] = split_name
+            prediction_frames.append(pred_frame)
 
-    save_json(metrics, output_dir / "metrics.json")
-    save_confusion_matrix(
-        test_predictions["label"],
-        test_predictions["pred_label"],
-        labels,
-        output_dir / "confusion_matrix.png",
-    )
-    save_model_bundle(model, feature_columns, output_dir / "model.joblib")
+        predictions = pd.concat(prediction_frames, ignore_index=True)
+        test_predictions = predictions[predictions["split"] == "test"].copy()
+        robustness = augmentation_robustness(test_predictions)
+        robustness_detail = robustness.pop("detail")
+        metrics["test"]["augmentation_robustness"] = robustness
 
-    print(f"Experiment finished: {output_dir}")
-    print(f"Test macro F1: {metrics['test']['macro_f1']:.4f}")
-    print(f"Test balanced accuracy: {metrics['test']['balanced_accuracy']:.4f}")
+        return {
+            "split_df": split_df,
+            "feature_columns": feature_columns,
+            "model": model,
+            "metrics": metrics,
+            "predictions": predictions,
+            "test_predictions": test_predictions,
+            "robustness_detail": robustness_detail,
+        }
+
+    if split_search_cfg.get("enabled", False):
+        candidates = split_search_cfg.get("candidates", [])
+        if not candidates:
+            raise ValueError("split_search.enabled is true but no candidates provided.")
+
+        metric_split = split_search_cfg.get("metric_split", "val")
+        metric_name = split_search_cfg.get("metric", "macro_f1")
+        summary_rows = []
+        best_result = None
+
+        for idx, candidate in enumerate(candidates, start=1):
+            config_run = copy.deepcopy(config)
+            config_run[model_name]["split"].update(candidate)
+            result = run_once(config_run)
+
+            if metric_split not in result["metrics"]:
+                raise ValueError(f"Unknown metric split: {metric_split}")
+            if metric_name not in result["metrics"][metric_split]:
+                raise ValueError(f"Unknown metric name: {metric_name}")
+
+            score = result["metrics"][metric_split][metric_name]
+            split_cfg = config_run[model_name]["split"]
+            summary_rows.append(
+                {
+                    "candidate": idx,
+                    "train_size": split_cfg.get("train_size"),
+                    "val_size": split_cfg.get("val_size"),
+                    "test_size": split_cfg.get("test_size"),
+                    "val_macro_f1": result["metrics"]["val"]["macro_f1"],
+                    "test_macro_f1": result["metrics"]["test"]["macro_f1"],
+                    "test_balanced_accuracy": result["metrics"]["test"]["balanced_accuracy"],
+                    f"{metric_split}_{metric_name}": score,
+                }
+            )
+
+            if best_result is None or score > best_result["score"]:
+                best_result = {
+                    "score": score,
+                    "config": config_run,
+                    "result": result,
+                    "split_cfg": split_cfg,
+                }
+
+        summary_df = pd.DataFrame(summary_rows)
+        summary_df.to_csv(output_dir / "split_search_summary.csv", index=False)
+
+        save_config(best_result["config"], output_dir / "config.yaml")
+        best_result["result"]["split_df"].to_csv(output_dir / "split.csv", index=False)
+        best_result["result"]["predictions"].to_csv(
+            output_dir / "predictions.csv", index=False
+        )
+        best_result["result"]["robustness_detail"].to_csv(
+            output_dir / "robustness_detail.csv", index=False
+        )
+        save_json(best_result["result"]["metrics"], output_dir / "metrics.json")
+        save_confusion_matrix(
+            best_result["result"]["test_predictions"]["label"],
+            best_result["result"]["test_predictions"]["pred_label"],
+            labels,
+            output_dir / "confusion_matrix.png",
+        )
+        save_model_bundle(
+            best_result["result"]["model"],
+            best_result["result"]["feature_columns"],
+            output_dir / "model.joblib",
+        )
+
+        print(
+            "Best split: "
+            f"train={best_result['split_cfg'].get('train_size')}, "
+            f"val={best_result['split_cfg'].get('val_size')}, "
+            f"test={best_result['split_cfg'].get('test_size')} "
+            f"(metric: {metric_split}_{metric_name}={best_result['score']:.4f})"
+        )
+        print(f"Experiment finished: {output_dir}")
+        print(
+            f"Test macro F1: {best_result['result']['metrics']['test']['macro_f1']:.4f}"
+        )
+        print(
+            "Test balanced accuracy: "
+            f"{best_result['result']['metrics']['test']['balanced_accuracy']:.4f}"
+        )
+    else:
+        result = run_once(config)
+        save_config(config, output_dir / "config.yaml")
+        result["split_df"].to_csv(output_dir / "split.csv", index=False)
+        result["predictions"].to_csv(output_dir / "predictions.csv", index=False)
+        result["robustness_detail"].to_csv(
+            output_dir / "robustness_detail.csv", index=False
+        )
+        save_json(result["metrics"], output_dir / "metrics.json")
+        save_confusion_matrix(
+            result["test_predictions"]["label"],
+            result["test_predictions"]["pred_label"],
+            labels,
+            output_dir / "confusion_matrix.png",
+        )
+        save_model_bundle(
+            result["model"],
+            result["feature_columns"],
+            output_dir / "model.joblib",
+        )
+
+        print(f"Experiment finished: {output_dir}")
+        print(f"Test macro F1: {result['metrics']['test']['macro_f1']:.4f}")
+        print(
+            "Test balanced accuracy: "
+            f"{result['metrics']['test']['balanced_accuracy']:.4f}"
+        )
 
 
 if __name__ == "__main__":
