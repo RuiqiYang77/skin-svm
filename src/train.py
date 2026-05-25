@@ -181,12 +181,15 @@ def main():
             output_dir / "robustness_detail.csv", index=False
         )
         save_json(best_result["result"]["metrics"], output_dir / "metrics.json")
-        save_confusion_matrix(
-            best_result["result"]["test_predictions"]["label"],
-            best_result["result"]["test_predictions"]["pred_label"],
-            labels,
-            output_dir / "confusion_matrix.png",
-        )
+
+        has_test = not best_result["result"]["test_predictions"].empty
+        if has_test:
+            save_confusion_matrix(
+                best_result["result"]["test_predictions"]["label"],
+                best_result["result"]["test_predictions"]["pred_label"],
+                labels,
+                output_dir / "confusion_matrix.png",
+            )
         save_model_bundle(
             best_result["result"]["model"],
             best_result["result"]["feature_columns"],
@@ -217,12 +220,16 @@ def main():
             output_dir / "robustness_detail.csv", index=False
         )
         save_json(result["metrics"], output_dir / "metrics.json")
-        save_confusion_matrix(
-            result["test_predictions"]["label"],
-            result["test_predictions"]["pred_label"],
-            labels,
-            output_dir / "confusion_matrix.png",
-        )
+
+        has_test = not result["test_predictions"].empty
+        if has_test:
+            save_confusion_matrix(
+                result["test_predictions"]["label"],
+                result["test_predictions"]["pred_label"],
+                labels,
+                output_dir / "confusion_matrix.png",
+            )
+
         save_model_bundle(
             result["model"],
             result["feature_columns"],
@@ -230,11 +237,18 @@ def main():
         )
 
         print(f"Experiment finished: {output_dir}")
-        print(f"Test macro F1: {result['metrics']['test']['macro_f1']:.4f}")
-        print(
-            "Test balanced accuracy: "
-            f"{result['metrics']['test']['balanced_accuracy']:.4f}"
-        )
+        if has_test:
+            print(
+                f"Test macro F1: {result['metrics']['test']['macro_f1']:.4f}"
+            )
+            print(
+                "Test balanced accuracy: "
+                f"{result['metrics']['test']['balanced_accuracy']:.4f}"
+            )
+        else:
+            print(
+                f"Val macro F1: {result['metrics']['val']['macro_f1']:.4f}"
+            )
 
 
 if __name__ == "__main__":

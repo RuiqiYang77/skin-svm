@@ -26,12 +26,17 @@ def create_grouped_split(df, config):
     )
 
     relative_val_size = val_size / (val_size + test_size)
-    val_groups, test_groups = train_test_split(
-        temp_groups,
-        train_size=relative_val_size,
-        random_state=random_state,
-        stratify=temp_groups["label"],
-    )
+    if relative_val_size >= 1.0:
+        # test_size 为 0，全部 temp 数据归验证集
+        val_groups = temp_groups
+        test_groups = temp_groups.iloc[0:0]  # 空 DataFrame
+    else:
+        val_groups, test_groups = train_test_split(
+            temp_groups,
+            train_size=relative_val_size,
+            random_state=random_state,
+            stratify=temp_groups["label"],
+        )
 
     split_map = {}
     split_map.update({base_id: "train" for base_id in train_groups["base_id"]})
