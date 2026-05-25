@@ -103,6 +103,16 @@ def main():
             ("val", X_val, y_val, val_meta),
             ("test", X_test, y_test, test_meta),
         ]:
+            if len(X) == 0:
+                metrics[split_name] = {
+                    "accuracy": None,
+                    "balanced_accuracy": None,
+                    "macro_precision": None,
+                    "macro_recall": None,
+                    "macro_f1": None,
+                    "classification_report": {},
+                }
+                continue
             y_pred = model.predict(X)
             y_prob = model.predict_proba(X) if hasattr(model, "predict_proba") else None
             metrics[split_name] = evaluate_predictions(y, y_pred, labels)
@@ -112,9 +122,12 @@ def main():
 
         predictions = pd.concat(prediction_frames, ignore_index=True)
         test_predictions = predictions[predictions["split"] == "test"].copy()
-        robustness = augmentation_robustness(test_predictions)
-        robustness_detail = robustness.pop("detail")
-        metrics["test"]["augmentation_robustness"] = robustness
+        if not test_predictions.empty:
+            robustness = augmentation_robustness(test_predictions)
+            robustness_detail = robustness.pop("detail")
+            metrics["test"]["augmentation_robustness"] = robustness
+        else:
+            robustness_detail = pd.DataFrame()
 
         return {
             "split_df": split_df,
