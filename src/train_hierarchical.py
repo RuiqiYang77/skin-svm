@@ -52,7 +52,7 @@ def parse_args():
     )
     parser.add_argument(
         "--features_module",
-        default="src.dataloader.features_xlc",
+        default="src.dataloader.features",
         help="Python module path for feature extraction.",
     )
     return parser.parse_args()

@@ -23,7 +23,14 @@ hierarchical_svm:
     use_advanced_color: true
     use_advanced_texture: true
     use_advanced_shape: true
-    use_melanin_features: false
+    use_melanin_features: true
+    use_dermoscopic_color: true
+    use_dermoscopic_asymmetry: true
+    use_dermoscopic_border: true
+    use_pigment_network: true
+    use_dots_globules: true
+    use_streaks: true
+    use_regression_structures: true
     mask_threshold: 127
     hsv_hist_bins: 16
     lbp_points: 24
@@ -33,14 +40,15 @@ hierarchical_svm:
   preprocessing:
     normalize: true
     morphology: false
+    hair_removal: true
     clahe: true
     clahe_kernel: 8
-    clahe_clip: 0.03
+    clahe_clip: 0.02
     color_normalize: true
     shades_of_gray_p: 6
 
   # soft routing: only assign vasc if p(vasc) >= this threshold
-  vasc_threshold: 0.65
+  vasc_threshold: 0.5
 
   # Stage 1: vasc vs (nv + mel)
   stage1:
@@ -51,10 +59,10 @@ hierarchical_svm:
       random_state: 42
     pca:
       enabled: true
-      n_components: 0.95
+      n_components: 0.90
     feature_selection:
       enabled: true
-      k: 120   # color + shape + clinical features are most relevant for vasc
+      k: 60   # tighter selection; vasc separation needs few, clean features
     grid_search:
       enabled: true
       cv: 5
@@ -75,7 +83,7 @@ hierarchical_svm:
       n_components: 0.95
     feature_selection:
       enabled: true
-      k: 60    # focus on top shape/texture features only
+      k: 80   # focus on top dermoscopic features for nv/mel discrimination
     grid_search:
       enabled: true
       cv: 5

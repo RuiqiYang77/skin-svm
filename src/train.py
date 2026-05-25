@@ -67,7 +67,6 @@ def main():
     extract_feature_table = features_mod.extract_feature_table
 
     metadata = build_metadata(config)
-    # 检查数据是否有增强（通过是否有任一条目的 augmentation_id 不是 "original"）
     has_aug = (metadata["augmentation_id"] != "original").any()
     validate_metadata(metadata, strict_groups=has_aug)
 
@@ -90,10 +89,10 @@ def main():
 
         feature_columns = X_train.columns.tolist()
         model = train_func(
-            X_train,
-            y_train,
+            X_train, y_train,
             groups=train_meta["base_id"].to_numpy(),
             config=config_run,
+            X_val=X_val, y_val=y_val,
         )
 
         metrics = {}
@@ -105,12 +104,9 @@ def main():
         ]:
             if len(X) == 0:
                 metrics[split_name] = {
-                    "accuracy": None,
-                    "balanced_accuracy": None,
-                    "macro_precision": None,
-                    "macro_recall": None,
-                    "macro_f1": None,
-                    "classification_report": {},
+                    "accuracy": None, "balanced_accuracy": None,
+                    "macro_precision": None, "macro_recall": None,
+                    "macro_f1": None, "classification_report": {},
                 }
                 continue
             y_pred = model.predict(X)
@@ -130,12 +126,9 @@ def main():
             robustness_detail = pd.DataFrame()
 
         return {
-            "split_df": split_df,
-            "feature_columns": feature_columns,
-            "model": model,
-            "metrics": metrics,
-            "predictions": predictions,
-            "test_predictions": test_predictions,
+            "split_df": split_df, "feature_columns": feature_columns,
+            "model": model, "metrics": metrics,
+            "predictions": predictions, "test_predictions": test_predictions,
             "robustness_detail": robustness_detail,
         }
 
@@ -161,107 +154,53 @@ def main():
 
             score = result["metrics"][metric_split][metric_name]
             split_cfg = config_run[model_name]["split"]
-            summary_rows.append(
-                {
-                    "candidate": idx,
-                    "train_size": split_cfg.get("train_size"),
-                    "val_size": split_cfg.get("val_size"),
-                    "test_size": split_cfg.get("test_size"),
-                    "val_macro_f1": result["metrics"]["val"]["macro_f1"],
-                    "test_macro_f1": result["metrics"]["test"]["macro_f1"],
-                    "test_balanced_accuracy": result["metrics"]["test"]["balanced_accuracy"],
-                    f"{metric_split}_{metric_name}": score,
-                }
-            )
+            summary_rows.append({
+                "candidate": idx,
+                "train_size": split_cfg.get("train_size"),
+                "val_size": split_cfg.get("val_size"),
+                "test_size": split_cfg.get("test_size"),
+                "val_macro_f1": result["metrics"]["val"]["macro_f1"],
+                "test_macro_f1": result["metrics"]["test"]["macro_f1"],
+                "test_balanced_accuracy": result["metrics"]["test"]["balanced_accuracy"],
+                f"{metric_split}_{metric_name}": score,
+            })
 
             if best_result is None or score > best_result["score"]:
                 best_result = {
-                    "score": score,
-                    "config": config_run,
-                    "result": result,
-                    "split_cfg": split_cfg,
+                    "score": score, "config": config_run,
+                    "result": result, "candidate": candidate,
                 }
 
         summary_df = pd.DataFrame(summary_rows)
         summary_df.to_csv(output_dir / "split_search_summary.csv", index=False)
+        print(f"Split search summary:\n{summary_df.to_string(index=False)}")
 
-        save_config(best_result["config"], output_dir / "config.yaml")
-        best_result["result"]["split_df"].to_csv(output_dir / "split.csv", index=False)
-        best_result["result"]["predictions"].to_csv(
-            output_dir / "predictions.csv", index=False
-        )
-        best_result["result"]["robustness_detail"].to_csv(
-            output_dir / "robustness_detail.csv", index=False
-        )
-        save_json(best_result["result"]["metrics"], output_dir / "metrics.json")
-
-        has_test = not best_result["result"]["test_predictions"].empty
-        if has_test:
-            save_confusion_matrix(
-                best_result["result"]["test_predictions"]["label"],
-                best_result["result"]["test_predictions"]["pred_label"],
-                labels,
-                output_dir / "confusion_matrix.png",
-            )
-        save_model_bundle(
-            best_result["result"]["model"],
-            best_result["result"]["feature_columns"],
-            output_dir / "model.joblib",
-        )
-
-        print(
-            "Best split: "
-            f"train={best_result['split_cfg'].get('train_size')}, "
-            f"val={best_result['split_cfg'].get('val_size')}, "
-            f"test={best_result['split_cfg'].get('test_size')} "
-            f"(metric: {metric_split}_{metric_name}={best_result['score']:.4f})"
-        )
-        print(f"Experiment finished: {output_dir}")
-        print(
-            f"Test macro F1: {best_result['result']['metrics']['test']['macro_f1']:.4f}"
-        )
-        print(
-            "Test balanced accuracy: "
-            f"{best_result['result']['metrics']['test']['balanced_accuracy']:.4f}"
-        )
-    else:
-        result = run_once(config)
+        final = best_result["result"]
+        best_candidate = best_result["candidate"]
+        config = best_result["config"]
         save_config(config, output_dir / "config.yaml")
-        result["split_df"].to_csv(output_dir / "split.csv", index=False)
-        result["predictions"].to_csv(output_dir / "predictions.csv", index=False)
-        result["robustness_detail"].to_csv(
-            output_dir / "robustness_detail.csv", index=False
-        )
-        save_json(result["metrics"], output_dir / "metrics.json")
+        if best_candidate.get("val_size") is not None:
+            print(f"Best split: train={best_candidate['train_size']}, "
+                  f"val={best_candidate['val_size']}, test={best_candidate['test_size']}")
+    else:
+        final = run_once(config)
+        save_config(config, output_dir / "config.yaml")
 
-        has_test = not result["test_predictions"].empty
-        if has_test:
-            save_confusion_matrix(
-                result["test_predictions"]["label"],
-                result["test_predictions"]["pred_label"],
-                labels,
-                output_dir / "confusion_matrix.png",
-            )
+    final["predictions"].to_csv(output_dir / "predictions.csv", index=False)
+    final["split_df"].to_csv(output_dir / "split.csv", index=False)
+    final["robustness_detail"].to_csv(output_dir / "robustness_detail.csv", index=False)
+    save_json(final["metrics"], output_dir / "metrics.json")
+    save_model_bundle(final["model"], final["feature_columns"], output_dir / "model.joblib")
+    save_confusion_matrix(
+        final["test_predictions"]["label"],
+        final["test_predictions"]["pred_label"],
+        labels,
+        output_dir / "confusion_matrix.png",
+    )
 
-        save_model_bundle(
-            result["model"],
-            result["feature_columns"],
-            output_dir / "model.joblib",
-        )
-
-        print(f"Experiment finished: {output_dir}")
-        if has_test:
-            print(
-                f"Test macro F1: {result['metrics']['test']['macro_f1']:.4f}"
-            )
-            print(
-                "Test balanced accuracy: "
-                f"{result['metrics']['test']['balanced_accuracy']:.4f}"
-            )
-        else:
-            print(
-                f"Val macro F1: {result['metrics']['val']['macro_f1']:.4f}"
-            )
+    print(f"Experiment finished: {output_dir}")
+    print(f"Test macro F1: {final['metrics']['test']['macro_f1']:.4f}")
+    print(f"Test balanced accuracy: {final['metrics']['test']['balanced_accuracy']:.4f}")
 
 
 if __name__ == "__main__":

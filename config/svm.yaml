@@ -24,6 +24,14 @@ svm:
     use_advanced_texture: true
     use_advanced_shape: true
     use_melanin_features: true
+    use_dermoscopic_color: true
+    use_dermoscopic_asymmetry: false
+    use_dermoscopic_border: false
+    use_pigment_network: false
+    use_dots_globules: true
+    use_streaks: false
+    use_regression_structures: true
+    use_composite_features: false
     mask_threshold: 127
     hsv_hist_bins: 16
     lbp_points: 24
@@ -33,6 +41,7 @@ svm:
   preprocessing:
     normalize: true
     morphology: false
+    hair_removal: false
     clahe: true
     clahe_kernel: 8
     clahe_clip: 0.03

@@ -9,10 +9,11 @@ os.environ.setdefault("XDG_CACHE_HOME", str(cache_dir))
 
 import numpy as np
 import pandas as pd
-from scipy.ndimage import binary_erosion, binary_dilation, uniform_filter
+from scipy.ndimage import binary_erosion, binary_dilation, gaussian_filter1d, uniform_filter
+from scipy.spatial import KDTree
 from scipy.stats import skew
-from skimage import color, measure
-from skimage.feature import graycomatrix, graycoprops, hog, local_binary_pattern
+from skimage import color, filters, measure, morphology
+from skimage.feature import blob_log, graycomatrix, graycoprops, hog, local_binary_pattern
 from skimage.filters.rank import entropy as local_entropy
 from skimage.morphology import disk
 from skimage.transform import resize
@@ -53,6 +54,30 @@ def extract_features(image_path, mask_path, config):
 
     if feature_cfg.get("use_hog", False):
         features.update(_hog_features(image, mask))
+
+    if feature_cfg.get("use_dermoscopic_color", False):
+        features.update(_dermoscopic_color_features(image, mask))
+
+    if feature_cfg.get("use_dermoscopic_asymmetry", False):
+        features.update(_dermoscopic_asymmetry_features(image, mask))
+
+    if feature_cfg.get("use_dermoscopic_border", False):
+        features.update(_dermoscopic_border_features(image, mask))
+
+    if feature_cfg.get("use_pigment_network", False):
+        features.update(_pigment_network_features(image, mask))
+
+    if feature_cfg.get("use_dots_globules", False):
+        features.update(_dots_globules_features(image, mask))
+
+    if feature_cfg.get("use_streaks", False):
+        features.update(_streak_features(image, mask))
+
+    if feature_cfg.get("use_regression_structures", False):
+        features.update(_regression_structures_features(image, mask))
+
+    if feature_cfg.get("use_composite_features", False):
+        features.update(_composite_features(image, mask))
 
     return features
 
@@ -239,6 +264,29 @@ def _texture_features(image, mask, feature_cfg):
         values = graycoprops(glcm, prop)
         result[f"glcm_{prop}_mean"] = float(np.mean(values))
         result[f"glcm_{prop}_std"] = float(np.std(values))
+
+    # Per-channel GLCM (R, G, B) for colour texture discrimination
+    try:
+        for ch_idx, ch_name in enumerate(["r", "g", "b"]):
+            ch_full = image[:, :, ch_idx] if image.dtype == np.float32 else image[:, :, ch_idx].astype(np.float32) / 255.0
+            ch_full = (ch_full * 255.0).astype(np.uint8)
+            ch_crop, _ = crop_to_mask(ch_full, mask)
+            ch_quantized = (ch_crop // 32).astype(np.uint8)
+            ch_quantized = np.where(crop_mask, ch_quantized, 0).astype(np.uint8)
+            ch_glcm = graycomatrix(
+                ch_quantized,
+                distances=[1, 2],
+                angles=[0, np.pi / 4, np.pi / 2, 3 * np.pi / 4],
+                levels=8,
+                symmetric=True,
+                normed=True,
+            )
+            result[f"glcm_{ch_name}_contrast_mean"] = float(np.mean(graycoprops(ch_glcm, "contrast")))
+            result[f"glcm_{ch_name}_homogeneity_mean"] = float(np.mean(graycoprops(ch_glcm, "homogeneity")))
+    except Exception:
+        for ch_name in ["r", "g", "b"]:
+            result[f"glcm_{ch_name}_contrast_mean"] = 0.0
+            result[f"glcm_{ch_name}_homogeneity_mean"] = 0.0
 
     return result
 
@@ -685,6 +733,661 @@ def _hog_features(image, mask):
         feature_vector=True,
     )
     return {f"hog_{idx}": float(value) for idx, value in enumerate(values)}
+
+
+# ---------------------------------------------------------------------------
+# Dermoscopic colour features (ABCDE-C clinical 6-colour mapping)
+# ---------------------------------------------------------------------------
+
+# Oukil et al. 2021 RGB centroids (normalised Euclidean distance)
+_OUKIL_CENTROIDS = {
+    "light_brown":  (200, 155, 130),
+    "medium_brown": (160, 100,  67),
+    "dark_brown":   (126,  67,  48),
+    "black":        ( 31,  26,  26),
+    "blue_gray":    ( 75, 112, 137),
+    "white":        (230, 230, 230),
+}
+# Normalisation factor: max possible Euclidean distance in RGB space
+_NORM = np.sqrt(255.0**2 * 3)  # ~441.67
+
+
+def _dermoscopic_color_features(image, mask):
+    """6-colour clinical mapping (Oukil et al. 2021) + colour entropy."""
+    result = {}
+    lesion = image[mask].astype(np.float64)
+    if len(lesion) < 10:
+        for k in _dermo_color_defaults():
+            result[k] = 0.0
+        return result
+
+    # Scale to [0, 255] to match Oukil centroids (image is [0, 1] after preprocessing)
+    lesion_255 = lesion * 255.0
+
+    centroids = np.array(list(_OUKIL_CENTROIDS.values()), dtype=np.float64)
+    centroid_colors = list(_OUKIL_CENTROIDS.keys())
+
+    dists = np.sqrt(((lesion_255[:, None, :] - centroids[None, :, :]) ** 2).sum(axis=2))
+    dists /= _NORM
+    nearest = np.argmin(dists, axis=1)
+
+    area_ratios = {}
+    for i, cname in enumerate(centroid_colors):
+        ratio = (nearest == i).mean()
+        result[f"dermo_{cname}_ratio"] = float(ratio)
+        area_ratios[cname] = ratio
+
+    # Number of colours covering >= 5% of lesion area
+    present = sum(1 for r in area_ratios.values() if r >= 0.05)
+    result["dermo_color_count"] = float(present)
+
+    # Dominant colour
+    if area_ratios:
+        dominant = max(area_ratios, key=area_ratios.get)
+        result["dermo_dominant_color_ratio"] = float(area_ratios[dominant])
+
+    # Colour Shannon entropy
+    counts = np.bincount(nearest, minlength=len(centroid_colors))
+    probs = counts / counts.sum()
+    probs = probs[probs > 0]
+    result["dermo_color_entropy"] = float(-np.sum(probs * np.log2(probs)))
+
+    # Blue-white combined ratio (blue_gray + white)
+    result["dermo_blue_white_ratio"] = float(area_ratios.get("blue_gray", 0) + area_ratios.get("white", 0))
+
+    # Colour spatial dispersion: std of distances from each colour's centroid to lesion centre
+    ys, xs = np.where(mask)
+    cy, cx = ys.mean(), xs.mean()
+    color_dispersions = []
+    for i in range(len(centroid_colors)):
+        c_pixels = np.where(nearest == i)[0]
+        if len(c_pixels) > 10:
+            cy_i = ys[c_pixels].mean()
+            cx_i = xs[c_pixels].mean()
+            color_dispersions.append(np.sqrt((cy_i - cy)**2 + (cx_i - cx)**2))
+    result["dermo_color_dispersion_std"] = float(np.std(color_dispersions)) if len(color_dispersions) > 1 else 0.0
+
+    return result
+
+
+def _dermo_color_defaults():
+    defaults = []
+    for c in _OUKIL_CENTROIDS:
+        defaults.append(f"dermo_{c}_ratio")
+    defaults += ["dermo_color_count", "dermo_dominant_color_ratio", "dermo_color_entropy",
+                  "dermo_blue_white_ratio", "dermo_color_dispersion_std"]
+    return defaults
+
+
+# ---------------------------------------------------------------------------
+# Dermoscopic asymmetry features (ABCDE-A / TDS A-score)
+# ---------------------------------------------------------------------------
+
+def _dermoscopic_asymmetry_features(image, mask):
+    """TDS-style shape + pigment asymmetry (Pellacani et al. 2004)."""
+    result = {}
+    try:
+        from skimage.measure import regionprops
+
+        regions = regionprops(mask.astype(np.uint8))
+        if not regions:
+            return _asymmetry_defaults()
+        region = max(regions, key=lambda r: r.area)
+        orientation = region.orientation
+        cy, cx = region.centroid
+
+        # ---- Shape asymmetry along major axis ----
+        result["tds_asymmetry_major_shape"] = _reflect_asymmetry(mask, cy, cx, orientation)
+        result["tds_asymmetry_minor_shape"] = _reflect_asymmetry(mask, cy, cx, orientation + np.pi / 2)
+
+        # ---- Pigment asymmetry (using dark area from median threshold) ----
+        gray = color.rgb2gray(image)
+        dark_thresh = np.median(gray[mask]) if mask.any() else 0.5
+        dark_mask = (gray < dark_thresh) & mask
+        result["tds_asymmetry_major_pigment"] = _reflect_asymmetry(dark_mask, cy, cx, orientation)
+        result["tds_asymmetry_minor_pigment"] = _reflect_asymmetry(dark_mask, cy, cx, orientation + np.pi / 2)
+
+        # TDS A score (0, 1, or 2)
+        shape_asym = (result["tds_asymmetry_major_shape"] < 0.90) + (result["tds_asymmetry_minor_shape"] < 0.90)
+        pigment_asym = (result["tds_asymmetry_major_pigment"] < 0.80) + (result["tds_asymmetry_minor_pigment"] < 0.80)
+        result["tds_a_score"] = float(np.clip(max(shape_asym, pigment_asym), 0, 2))
+
+        # ---- Quadrant colour variance ratio ----
+        h, w = mask.shape
+        quadrant_means = []
+        for y_lo, y_hi in [(0, int(cy)), (int(cy), h)]:
+            for x_lo, x_hi in [(0, int(cx)), (int(cx), w)]:
+                q_mask = np.zeros_like(mask)
+                q_mask[y_lo:y_hi, x_lo:x_hi] = True
+                q_mask &= mask
+                if q_mask.sum() > 10:
+                    quadrant_means.append(image[q_mask].mean(axis=0))
+        if len(quadrant_means) >= 4:
+            qm = np.array(quadrant_means)
+            within_var = qm.var(axis=0).mean()
+            total_var = image[mask].var(axis=0).mean()
+            result["tds_quadrant_color_var_ratio"] = float(within_var / (total_var + 1e-8))
+        else:
+            result["tds_quadrant_color_var_ratio"] = 0.0
+
+    except Exception:
+        result.update(_asymmetry_defaults())
+    return result
+
+
+def _asymmetry_defaults():
+    return {
+        "tds_asymmetry_major_shape": 1.0, "tds_asymmetry_minor_shape": 1.0,
+        "tds_asymmetry_major_pigment": 1.0, "tds_asymmetry_minor_pigment": 1.0,
+        "tds_a_score": 0.0, "tds_quadrant_color_var_ratio": 0.0,
+    }
+
+
+def _reflect_asymmetry(mask_2d, cy, cx, angle_rad):
+    """Return overlap ratio (IoU) after reflecting one half across an axis."""
+    h, w = mask_2d.shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    # Signed distance from axis
+    signed_dist = (xx - cx) * np.sin(angle_rad) - (yy - cy) * np.cos(angle_rad)
+    half1 = (signed_dist >= 0) & mask_2d
+    half2 = (signed_dist < 0) & mask_2d
+
+    # Reflect half2 across the axis
+    perp_x = -np.cos(angle_rad)
+    perp_y = -np.sin(angle_rad)
+    proj = (yy - cy) * perp_y + (xx - cx) * perp_x
+    reflect_y = (yy.astype(float) - 2 * proj * perp_y).round().astype(int)
+    reflect_x = (xx.astype(float) - 2 * proj * perp_x).round().astype(int)
+    valid = (reflect_y >= 0) & (reflect_y < h) & (reflect_x >= 0) & (reflect_x < w)
+    reflected = np.zeros_like(mask_2d)
+    reflected[reflect_y[valid], reflect_x[valid]] = half2[valid]
+
+    intersection = (half1 & reflected).sum()
+    union = (half1 | reflected).sum()
+    return float(intersection / union) if union > 0 else 1.0
+
+
+# ---------------------------------------------------------------------------
+# Dermoscopic border features (ABCDE-B)
+# ---------------------------------------------------------------------------
+
+def _dermoscopic_border_features(image, mask):
+    """Notch count, 8-octant abruptness, enhanced fractal dimension, gradient CV."""
+    result = {}
+    try:
+        eroded = binary_erosion(mask, iterations=2)
+        boundary = mask & ~eroded
+        bys, bxs = np.where(boundary)
+
+        if len(bys) < 20:
+            return _border_defaults()
+
+        # ---- 1. Notch / indentation count (Jaworek-Korjakowska 2015) ----
+        cy, cx = bys.mean(), bxs.mean()
+        angles = np.arctan2(bys - cy, bxs - cx)
+        distances = np.sqrt((bys - cy)**2 + (bxs - cx)**2)
+        order = np.argsort(angles)
+        r_sorted = distances[order]
+        sigma = max(2, len(r_sorted) // 30)
+        sm_sorted = gaussian_filter1d(r_sorted.astype(float), sigma)
+        deriv = np.diff(sm_sorted)
+        minima_mask = (np.diff(np.sign(deriv)) > 0)
+        minima_idx = np.where(minima_mask)[0] + 1
+        if len(minima_idx) > 0:
+            mean_r = sm_sorted.mean()
+            deep_notches = [i for i in minima_idx if sm_sorted[i] < mean_r * 0.9]
+            result["border_notch_count"] = float(len(deep_notches))
+        else:
+            result["border_notch_count"] = 0.0
+
+        # ---- 2. 8-octant border abruptness score (TDS B) ----
+        gray = color.rgb2gray(image)
+        octant_score = 0
+        for octant in range(8):
+            angle_lo = octant * np.pi / 4 - np.pi
+            angle_hi = (octant + 1) * np.pi / 4 - np.pi
+            # Outer rim pixels for this octant
+            dilated = binary_dilation(mask, iterations=8)
+            outer_rim = dilated & ~mask
+            or_ys, or_xs = np.where(outer_rim)
+            if len(or_ys) < 10:
+                continue
+            o_angles = np.arctan2(or_ys - cy, or_xs - cx)
+            in_octant = (o_angles >= angle_lo) & (o_angles < angle_hi)
+            if in_octant.sum() < 10:
+                continue
+            grad_y, grad_x = np.gradient(gray)
+            grad_mag = np.sqrt(grad_y**2 + grad_x**2)
+            octant_grad = grad_mag[outer_rim][in_octant] if in_octant.sum() <= len(or_ys) else np.zeros(1)
+            if len(octant_grad) > 0 and np.mean(octant_grad) > 0.03:
+                octant_score += 1
+        result["border_abruptness_score"] = float(octant_score)  # 0-8
+
+        # ---- 3. Enhanced fractal dimension ----
+        result["border_fractal_dimension_enhanced"] = _fractal_dimension_enhanced(mask)
+
+        # ---- 4. Border gradient coefficient of variation ----
+        grad_y, grad_x = np.gradient(gray)
+        grad_mag = np.sqrt(grad_y**2 + grad_x**2)
+        border_grads = grad_mag[boundary]
+        if len(border_grads) > 0:
+            result["border_grad_cv"] = float(border_grads.std() / (border_grads.mean() + 1e-8))
+        else:
+            result["border_grad_cv"] = 0.0
+
+    except Exception:
+        result.update(_border_defaults())
+    return result
+
+
+def _border_defaults():
+    return {"border_notch_count": 0.0, "border_abruptness_score": 0.0,
+            "border_fractal_dimension_enhanced": 0.0, "border_grad_cv": 0.0}
+
+
+
+def _fractal_dimension_enhanced(mask):
+    """Box-counting with more sizes for better FD estimate."""
+    eroded = binary_erosion(mask)
+    boundary = mask & ~eroded
+    if boundary.sum() < 20:
+        return 0.0
+    ys, xs = np.where(boundary)
+    points = np.column_stack([ys, xs])
+    sizes = np.array([2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64])
+    counts = []
+    for s in sizes:
+        boxes = set()
+        stride = max(1, len(points) // 3000)
+        for p in points[::stride]:
+            boxes.add((p[0] // s, p[1] // s))
+        if len(boxes) > 0:
+            counts.append(len(boxes))
+    if len(counts) < 4:
+        return 0.0
+    coeffs = np.polyfit(np.log(sizes[:len(counts)]), np.log(counts), 1)
+    return float(-coeffs[0])
+
+
+# ---------------------------------------------------------------------------
+# Pigment network features (7-point checklist — major criterion)
+# ---------------------------------------------------------------------------
+
+def _pigment_network_features(image, mask):
+    """Gabor-based pigment network regularity analysis."""
+    result = {}
+    try:
+        gray = color.rgb2gray(image)
+        orientation_values = np.linspace(0, np.pi, 9)[:8]  # 8 orientations
+
+        energies = []
+        full_mags = []
+        for theta in orientation_values:
+            for freq in (0.1, 0.2):
+                try:
+                    real, imag = filters.gabor(gray, frequency=freq, theta=theta)
+                    mag = np.sqrt(real**2 + imag**2)
+                    energies.append(mag[mask].mean())
+                    full_mags.append(mag)
+                except Exception:
+                    pass
+
+        if energies:
+            result["pigment_network_gabor_energy_mean"] = float(np.mean(energies))
+            result["pigment_network_gabor_energy_std"] = float(np.std(energies))
+
+            # Energy entropy: regular network has energy concentrated in few orientations
+            if len(energies) >= 4:
+                e_arr = np.array(energies)
+                e_sum = e_arr.sum()
+                if e_sum > 0:
+                    e_prob = e_arr / e_sum
+                    e_prob = e_prob[e_prob > 0]
+                    result["pigment_network_gabor_entropy"] = float(-np.sum(e_prob * np.log2(e_prob)))
+                else:
+                    result["pigment_network_gabor_entropy"] = 0.0
+            else:
+                result["pigment_network_gabor_entropy"] = 0.0
+
+            # Reticular area ratio: pixels with strong Gabor response
+            max_mag = np.maximum.reduce(full_mags)
+            if max_mag.max() > 0:
+                thresh = filters.threshold_otsu(max_mag[mask]) if mask.any() else 0.1
+                reticular = (max_mag > thresh) & mask
+                result["pigment_network_reticular_ratio"] = float(reticular.sum() / mask.sum())
+            else:
+                result["pigment_network_reticular_ratio"] = 0.0
+        else:
+            result["pigment_network_gabor_energy_mean"] = 0.0
+            result["pigment_network_gabor_energy_std"] = 0.0
+            result["pigment_network_gabor_entropy"] = 0.0
+            result["pigment_network_reticular_ratio"] = 0.0
+
+        # Dark reticular line density (morphological black-hat + skeleton)
+        try:
+            gray_uint8 = np.clip(gray * 255.0, 0, 255).astype(np.uint8)
+            crop_img, crop_mask = crop_to_mask(gray_uint8, mask)
+            se = morphology.disk(3)
+            blackhat = morphology.black_tophat(crop_img.astype(float), se)
+            # Threshold to get dark lines
+            dark_lines = (blackhat > 8) & crop_mask
+            if dark_lines.sum() > 10:
+                skeleton = morphology.skeletonize(dark_lines)
+                result["pigment_network_line_density"] = float(skeleton.sum() / crop_mask.sum())
+            else:
+                result["pigment_network_line_density"] = 0.0
+        except Exception:
+            result["pigment_network_line_density"] = 0.0
+
+    except Exception:
+        for k in ["pigment_network_gabor_energy_mean", "pigment_network_gabor_energy_std",
+                  "pigment_network_gabor_entropy", "pigment_network_reticular_ratio",
+                  "pigment_network_line_density"]:
+            result[k] = 0.0
+    return result
+
+
+
+# ---------------------------------------------------------------------------
+# Dots / globules features (7-point checklist — minor criterion)
+# ---------------------------------------------------------------------------
+
+def _dots_globules_features(image, mask):
+    """LoG blob detection for atypical dots and globules."""
+    result = {}
+    try:
+        gray = color.rgb2gray(image)
+        # Detect dark blobs inside lesion
+        blobs = blob_log(gray * mask.astype(float), min_sigma=1.0, max_sigma=5.0,
+                         num_sigma=10, threshold=0.03)
+        if len(blobs) == 0:
+            return _dots_defaults()
+
+        # Filter: centre of blob must be within mask
+        cy, cx = blobs[:, 0].astype(int), blobs[:, 1].astype(int)
+        valid = mask[cy.clip(0, mask.shape[0]-1), cx.clip(0, mask.shape[1]-1)]
+        blobs = blobs[valid]
+        if len(blobs) == 0:
+            return _dots_defaults()
+
+        result["dots_globules_count"] = float(len(blobs))
+        sigmas = blobs[:, 2]
+        result["dots_globules_sigma_mean"] = float(sigmas.mean())
+        result["dots_globules_sigma_std"] = float(sigmas.std()) if len(sigmas) > 1 else 0.0
+
+        # Nearest-neighbour distance variability (irregular spacing = melanoma)
+        positions = blobs[:, :2]
+        if len(positions) > 2:
+            tree = KDTree(positions)
+            dists, _ = tree.query(positions, k=2)
+            nn_dists = dists[:, 1]  # nearest neighbour distance
+            result["dots_globules_nn_dist_mean"] = float(nn_dists.mean())
+            result["dots_globules_nn_dist_cv"] = float(nn_dists.std() / (nn_dists.mean() + 1e-8))
+        else:
+            result["dots_globules_nn_dist_mean"] = 0.0
+            result["dots_globules_nn_dist_cv"] = 0.0
+
+        # Peripheral density ratio (peripheral 30% ring vs centre)
+        ys, xs = np.where(mask)
+        cy, cx = ys.mean(), xs.mean()
+        max_dist = np.sqrt((ys - cy)**2 + (xs - cx)**2).max()
+        blob_dists = np.sqrt((blobs[:, 0] - cy)**2 + (blobs[:, 1] - cx)**2)
+        peripheral_mask = blob_dists > 0.7 * max_dist
+        centre_mask = blob_dists <= 0.7 * max_dist
+        peri_density = peripheral_mask.sum() / max(mask[ys > 0].sum() * 0.3, 1)
+        centre_density = (centre_mask.sum() / max(mask.sum() * 0.7, 1)) if centre_mask.sum() > 0 else 0
+        result["dots_peripheral_density_ratio"] = float(
+            peri_density / (centre_density + 1e-8)) if centre_density > 0 else 1.0
+
+    except Exception:
+        result.update(_dots_defaults())
+    return result
+
+
+def _dots_defaults():
+    return {
+        "dots_globules_count": 0.0, "dots_globules_sigma_mean": 0.0,
+        "dots_globules_sigma_std": 0.0, "dots_globules_nn_dist_mean": 0.0,
+        "dots_globules_nn_dist_cv": 0.0, "dots_peripheral_density_ratio": 0.0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Streak / pseudopod features (7-point checklist — minor criterion)
+# ---------------------------------------------------------------------------
+
+def _streak_features(image, mask):
+    """Radial streak analysis at lesion periphery."""
+    result = {}
+    try:
+        gray = color.rgb2gray(image)
+
+        # Define peripheral ring: 10%-30% of lesion radius from boundary
+        eroded_inner = binary_erosion(mask, iterations=int(mask.shape[0] * 0.03))
+        if not eroded_inner.any():
+            return _streak_defaults()
+
+        peripheral = mask & ~eroded_inner
+        if peripheral.sum() < 50:
+            return _streak_defaults()
+
+        # ---- 1. Radial gradient consistency ----
+        ys, xs = np.where(mask)
+        cy, cx = ys.mean(), xs.mean()
+        per_ys, per_xs = np.where(peripheral)
+
+        radial_angles = np.arctan2(per_ys - cy, per_xs - cx)
+        grad_y, grad_x = np.gradient(gray)
+        grad_angles = np.arctan2(grad_y[peripheral], grad_x[peripheral])
+        grad_mag = np.sqrt(grad_y[peripheral]**2 + grad_x[peripheral]**2)
+
+        # Cosine similarity between gradient direction and radial direction
+        angle_diff = np.cos(radial_angles - grad_angles)  # 1 = aligned, -1 = opposite
+        # Weight by gradient magnitude
+        if grad_mag.sum() > 0:
+            alignment = (angle_diff * grad_mag).sum() / grad_mag.sum()
+            result["streak_radial_alignment"] = float(alignment)
+        else:
+            result["streak_radial_alignment"] = 0.0
+
+        # Angle concentration (high concentration = streaks pointing in few directions)
+        strong_grad = grad_mag > np.percentile(grad_mag, 75)
+        if strong_grad.sum() > 10:
+            strong_angles = radial_angles[strong_grad]
+            # Circular variance (1 - |mean of unit vectors|)
+            mean_vec = np.array([np.cos(strong_angles).mean(), np.sin(strong_angles).mean()])
+            circ_var = 1.0 - np.sqrt((mean_vec**2).sum())
+            result["streak_angle_concentration"] = float(1.0 - circ_var)  # high = concentrated
+        else:
+            result["streak_angle_concentration"] = 0.0
+
+        # ---- 2. Peripheral FFT high-frequency energy (boundary irregularities) ----
+        eroded = binary_erosion(mask, iterations=2)
+        boundary = mask & ~eroded
+        bys, bxs = np.where(boundary)
+        if len(bys) > 20:
+            angles = np.arctan2(bys - cy, bxs - cx)
+            r_vals = np.sqrt((bys - cy)**2 + (bxs - cx)**2)
+            order = np.argsort(angles)
+            r_sorted = r_vals[order]
+            # FFT of radial function
+            fft = np.abs(np.fft.rfft(r_sorted))
+            total = fft.sum()
+            if total > 0:
+                # High-frequency energy ratio (top 50% of frequencies)
+                mid = len(fft) // 2
+                result["streak_border_hf_energy"] = float(fft[mid:].sum() / total)
+            else:
+                result["streak_border_hf_energy"] = 0.0
+        else:
+            result["streak_border_hf_energy"] = 0.0
+
+    except Exception:
+        result.update(_streak_defaults())
+    return result
+
+
+def _streak_defaults():
+    return {"streak_radial_alignment": 0.0, "streak_angle_concentration": 0.0,
+            "streak_border_hf_energy": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# Regression structures / blue-white veil (7-point checklist — enhanced)
+# ---------------------------------------------------------------------------
+
+def _regression_structures_features(image, mask):
+    """Enhanced blue-white veil + regression structure detection."""
+    result = {}
+    try:
+        lab = color.rgb2lab(image)
+        hsv = color.rgb2hsv(image)
+        lesion_lab = lab[mask]
+        lesion_hsv = hsv[mask]
+        if len(lesion_lab) < 10:
+            return _regression_defaults()
+
+        # ---- 1. Blue-white veil (enhanced — Celebi et al. 2008 inspired) ----
+        # Blue-gray: B-channel dominant, medium-low intensity, low saturation
+        r, g, b = image[:, :, 0].astype(float), image[:, :, 1].astype(float), image[:, :, 2].astype(float)
+        # Blue dominance
+        blue_dominant = (b > r) & (b > g)
+        # Medium intensity (not too dark, not too bright)
+        intensity = (r + g + b) / 3.0
+        medium_intensity = (intensity > 40) & (intensity < 180)
+        # Low saturation
+        low_saturation = hsv[:, :, 1] < 0.4
+
+        bwv_mask = blue_dominant & medium_intensity & low_saturation & mask
+        result["blue_white_veil_enhanced_ratio"] = float(bwv_mask.sum() / mask.sum())
+
+        # ---- 2. White regression areas (scar-like depigmentation) ----
+        white_mask = (
+            (lab[:, :, 0] > 85) &
+            (np.abs(lab[:, :, 1]) < 5) &
+            (np.abs(lab[:, :, 2]) < 5) &
+            mask
+        )
+        result["regression_white_ratio"] = float(white_mask.sum() / mask.sum())
+
+        # ---- 3. Blue-gray peppering (small pepper-like granules in regression) ----
+        blue_gray_mask = (
+            (lesion_lab[:, 1] < -3) &
+            (lesion_lab[:, 2] < -3) &
+            (lesion_lab[:, 0] > 30) &
+            (lesion_lab[:, 0] < 70)
+        )
+        result["regression_pepper_ratio"] = float(blue_gray_mask.mean())
+
+    except Exception:
+        result.update(_regression_defaults())
+    return result
+
+
+def _regression_defaults():
+    return {"blue_white_veil_enhanced_ratio": 0.0, "regression_white_ratio": 0.0,
+            "regression_pepper_ratio": 0.0}
+
+
+def gray_scaled(image):
+    """Return float gray image in [0, 1]."""
+    return color.rgb2gray(image) if image.ndim == 3 else image.astype(float) / 255.0
+
+
+# ---------------------------------------------------------------------------
+# Composite ratio features (targeting large-but-benign NV vs MEL)
+# Key insight: wrong NV shares MEL-like size but retains NV-like colours.
+# Ratios of colour ÷ size amplify this separation signal.
+# ---------------------------------------------------------------------------
+
+def _composite_features(image, mask):
+    """Composite features: colour × shape ratios to separate large NV from MEL."""
+    result = {}
+    try:
+        lesion = image[mask].astype(np.float64)
+        if len(lesion) < 10:
+            return _composite_defaults()
+
+        eps = 1e-8
+        h, w = mask.shape
+
+        # ---- Size & shape proxies ----
+        area_r = mask.sum() / mask.size
+        perimeter_val = float(measure.perimeter(mask))
+        compactness = float(perimeter_val / (np.sqrt(mask.sum()) + eps))
+
+        # Asymmetry (horizontal + vertical)
+        from skimage.measure import regionprops
+        regions = regionprops(mask.astype(np.uint8))
+        if regions:
+            r = max(regions, key=lambda x: x.area)
+            horiz_asym = float(_asymmetry(mask, axis=1))
+            vert_asym = float(_asymmetry(mask, axis=0))
+            eccentricity = float(r.eccentricity)
+            solidity = float(r.solidity)
+            circularity = float(4.0 * np.pi * r.area / (perimeter_val**2 + eps))
+        else:
+            horiz_asym = vert_asym = eccentricity = solidity = circularity = 1.0
+
+        # ---- Colour features that distinguish NV from MEL ----
+        hsv = color.rgb2hsv(image)
+        lesion_hsv = hsv[mask]
+        hue_mean = float(lesion_hsv[:, 0].mean())
+        hue_std = float(lesion_hsv[:, 0].std())
+        sat_mean = float(lesion_hsv[:, 1].mean())
+        val_mean = float(lesion_hsv[:, 2].mean())
+
+        lab = color.rgb2lab(image)
+        lesion_lab = lab[mask]
+        lab_b_mean = float(lesion_lab[:, 2].mean())
+
+        # ---- Colour ratios (NV has distinct colour signatures) ----
+        r_ch, g_ch, b_ch = lesion[:, 0], lesion[:, 1], lesion[:, 2]
+        gb_ratio = float(np.mean(g_ch / (b_ch + eps)))  # NV has lower G/B ratio than MEL
+
+        # ---- Dark pixel ratio ----
+        dark_ratio = float(np.mean(lesion_hsv[:, 2] < 0.35))
+
+        # ---- Composite features: colour ÷ size ----
+        # Core idea: large+benign has NV-like colour profile; large+malignant has MEL-like
+        result["composite_gb_ratio_per_size"] = float(gb_ratio / (area_r + eps))
+        result["composite_hue_mean_per_size"] = float(hue_mean / (area_r + eps))
+        result["composite_dark_per_size"] = float(dark_ratio / (area_r + eps))
+        result["composite_lab_b_per_size"] = float(abs(lab_b_mean) / (area_r + eps))
+
+        # Shape × colour interactions
+        result["composite_solidity_per_size"] = float(solidity / (area_r + eps))
+        result["composite_circularity_per_size"] = float(circularity / (area_r + eps))
+        result["composite_compactness_x_size"] = float(compactness * area_r)
+        result["composite_asymmetry_per_size"] = float((horiz_asym + vert_asym) / (area_r + eps))
+
+        # Colour × shape interaction (large lesion with uniform colour → benign)
+        result["composite_hue_std_x_asymmetry"] = float(hue_std * (horiz_asym + vert_asym))
+        result["composite_sat_x_eccentricity"] = float(sat_mean * eccentricity)
+
+        # Border complexity relative to size (large+simple → benign, large+complex → malignant)
+        border_irreg = float(perimeter_val / (measure.perimeter(regions[0].convex_image) + eps)) if regions else 1.0
+        result["composite_border_per_size"] = float(border_irreg / (area_r + eps))
+
+    except Exception:
+        result.update(_composite_defaults())
+    return result
+
+
+def _composite_defaults():
+    return {
+        "composite_gb_ratio_per_size": 0.0,
+        "composite_hue_mean_per_size": 0.0,
+        "composite_dark_per_size": 0.0,
+        "composite_lab_b_per_size": 0.0,
+        "composite_solidity_per_size": 0.0,
+        "composite_circularity_per_size": 0.0,
+        "composite_compactness_x_size": 0.0,
+        "composite_asymmetry_per_size": 0.0,
+        "composite_hue_std_x_asymmetry": 0.0,
+        "composite_sat_x_eccentricity": 0.0,
+        "composite_border_per_size": 0.0,
+    }
 
 
 # ---------------------------------------------------------------------------

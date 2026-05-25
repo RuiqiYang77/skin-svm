@@ -1,6 +1,40 @@
 import numpy as np
 from PIL import Image
-from skimage import morphology
+from skimage import color as sk_color, exposure, morphology
+
+
+def _remove_hair(image):
+    """Remove hair using morphological black-hat on each RGB channel.
+
+    Detects thin dark structures (hair) via black-hat with a linear
+    structuring element in three orientations, then inpaints them with
+    the local mean of non-hair pixels.
+    """
+    result = image.copy()
+    for c in range(3):
+        channel = image[:, :, c].astype(np.float32)
+        hair_mask = np.zeros(channel.shape, dtype=bool)
+        for angle_deg in (0, 45, 90):
+            se = morphology.disk(2)
+            se_len = max(channel.shape) // 30
+            se_strip = np.zeros((se_len, se_len), dtype=bool)
+            cx = se_len // 2
+            cy = se_len // 2
+            rad = np.deg2rad(angle_deg)
+            dx, dy = np.cos(rad), -np.sin(rad)
+            for s in range(-se_len // 2, se_len // 2 + 1):
+                y = int(round(cy + s * dy))
+                x = int(round(cx + s * dx))
+                if 0 <= y < se_len and 0 <= x < se_len:
+                    se_strip[y, x] = True
+            if se_strip.sum() < 3:
+                continue
+            blackhat = morphology.black_tophat(channel, se_strip)
+            hair_mask |= blackhat > 15
+        if hair_mask.any() and not hair_mask.all():
+            fill_val = channel[~hair_mask].mean()
+            result[:, :, c] = np.where(hair_mask, fill_val, channel)
+    return result.astype(np.uint8)
 
 
 def load_image_and_mask(image_path, mask_path, config):
@@ -28,10 +62,10 @@ def load_image_and_mask(image_path, mask_path, config):
     if not binary_mask.any():
         raise ValueError(f"Empty lesion mask: {mask_path}")
 
-    if prep_cfg.get("clahe", False):
-        # CLAHE contrast enhancement on Lab L-channel
-        from skimage import color as sk_color, exposure
+    if prep_cfg.get("hair_removal", False):
+        image = _remove_hair(image)
 
+    if prep_cfg.get("clahe", False):
         lab = sk_color.rgb2lab(image)
         L = lab[:, :, 0] / 100.0  # normalise L to [0, 1]
         kernel = prep_cfg.get("clahe_kernel", 12)
@@ -41,7 +75,6 @@ def load_image_and_mask(image_path, mask_path, config):
         image = np.clip(sk_color.lab2rgb(lab) * 255.0, 0, 255).astype(np.uint8)
 
     if prep_cfg.get("color_normalize", False):
-        # Shades of Gray color constancy (Minkowski norm p=6 for skin images)
         image = image.astype(np.float32)
         p = float(prep_cfg.get("shades_of_gray_p", 6))
         illuminant = []
