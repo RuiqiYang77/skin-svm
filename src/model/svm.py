@@ -1,8 +1,12 @@
+"""Define the SVM training backend used by the main experiment pipeline.
+
+The backend builds a scikit-learn pipeline, performs optional grouped grid
+search, and saves the trained model with its feature-column schema.
+"""
+
 import joblib
-import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
-from sklearn.metrics import f1_score
 from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -10,6 +14,7 @@ from sklearn.svm import SVC
 
 
 def build_svm_pipeline(config):
+    """Build the SVM pipeline used by the main experiments."""
     svm_cfg = config["svm"]
     steps = [("scaler", StandardScaler())]
 
@@ -37,6 +42,7 @@ def build_svm_pipeline(config):
 
 
 def train_svm(X_train, y_train, groups, config, X_val=None, y_val=None):
+    """Train an SVM with grouped CV and optional validation-set selection."""
     pipeline = build_svm_pipeline(config)
     grid_cfg = config["svm"]["grid_search"]
 
@@ -98,8 +104,10 @@ def train_svm(X_train, y_train, groups, config, X_val=None, y_val=None):
 
 
 def save_model_bundle(model, feature_columns, path):
+    """Persist the trained model and feature column order."""
     joblib.dump({"model": model, "feature_columns": feature_columns}, path)
 
 
 def load_model_bundle(path):
+    """Load a model bundle saved by ``save_model_bundle``."""
     return joblib.load(path)

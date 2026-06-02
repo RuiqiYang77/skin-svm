@@ -1,3 +1,9 @@
+"""Define a Logistic Regression backend compatible with the training pipeline.
+
+The module provides pipeline construction, optional grid search, and model
+bundle serialization for the shared experiment workflow.
+"""
+
 import joblib
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GridSearchCV, StratifiedKFold

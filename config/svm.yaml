@@ -1,16 +1,16 @@
 model: svm
 
 data:
-  image_dir: data/image
-  mask_dir: data/mask
-  label_csv: data/label.csv
+  image_dir: data/train/image
+  mask_dir: data/train/mask
+  label_csv: data/train/label.csv
   output_dir: outputs
 
 svm:
   split:
-    train_size: 0.7
-    val_size: 0.1
-    test_size: 0.2
+    train_size: 0.8
+    val_size: 0.2
+    test_size: 0.0
     random_state: 42
     group_by: base_id
 
@@ -55,7 +55,7 @@ svm:
     random_state: 42
 
   pca:
-    enabled: true     # 开启后效果会涨点
+    enabled: true
     n_components: 0.95
 
   feature_selection:

@@ -1,3 +1,9 @@
+"""Define a Random Forest backend compatible with the training pipeline.
+
+The module mirrors the SVM backend interface so the shared training script can
+train and save a Random Forest model from the same feature table.
+"""
+
 import joblib
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import GridSearchCV, StratifiedKFold

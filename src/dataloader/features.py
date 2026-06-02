@@ -1,3 +1,9 @@
+"""Extract handcrafted lesion features for model training and inference.
+
+The module converts an image and lesion mask into tabular color, texture,
+shape, and optional dermoscopic descriptors used by the classical classifiers.
+"""
+
 import os
 import tempfile
 from pathlib import Path
@@ -27,6 +33,7 @@ from src.dataloader.preprocessing import crop_to_mask, load_image_and_mask
 # ---------------------------------------------------------------------------
 
 def extract_features(image_path, mask_path, config):
+    """Extract the configured handcrafted feature vector for one sample."""
     image, mask = load_image_and_mask(image_path, mask_path, config)
     features = {}
     feature_cfg = config[config["model"]]["features"]
@@ -83,6 +90,7 @@ def extract_features(image_path, mask_path, config):
 
 
 def extract_feature_table(metadata_df, config):
+    """Extract features for every metadata row and return a clean DataFrame."""
     rows = []
     for row in tqdm(
         metadata_df.itertuples(index=False),

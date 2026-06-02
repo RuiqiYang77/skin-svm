@@ -1,3 +1,9 @@
+"""Compute metrics and save evaluation artifacts for lesion classification.
+
+The helpers produce scalar classification metrics, prediction tables,
+confusion-matrix figures, and augmentation-consistency summaries.
+"""
+
 import os
 import tempfile
 from pathlib import Path

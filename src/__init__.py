@@ -1,1 +1,1 @@
-
+"""Skin lesion classification package."""

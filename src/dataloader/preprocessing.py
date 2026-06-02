@@ -1,3 +1,9 @@
+"""Load lesion images and masks with optional image preprocessing.
+
+This module centralizes mask thresholding, morphology, hair removal, contrast
+enhancement, color normalization, and lesion cropping helpers.
+"""
+
 import numpy as np
 from PIL import Image
 from skimage import color as sk_color, exposure, morphology
@@ -38,6 +44,7 @@ def _remove_hair(image):
 
 
 def load_image_and_mask(image_path, mask_path, config):
+    """Load an RGB image and binary lesion mask with optional preprocessing."""
     image = np.array(Image.open(image_path).convert("RGB"))
     mask = np.array(Image.open(mask_path).convert("L"))
 
@@ -98,6 +105,7 @@ def load_image_and_mask(image_path, mask_path, config):
 
 
 def crop_to_mask(image, mask, padding=4):
+    """Crop an image-like array to the lesion bounding box plus padding."""
     ys, xs = np.where(mask)
     y0 = max(int(ys.min()) - padding, 0)
     y1 = min(int(ys.max()) + padding + 1, mask.shape[0])

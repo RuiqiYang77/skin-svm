@@ -1,3 +1,9 @@
+"""Read and write YAML configuration files for experiments.
+
+Training saves the resolved configuration next to model outputs so each run can
+be reproduced from its artifact directory.
+"""
+
 from pathlib import Path
 
 import yaml

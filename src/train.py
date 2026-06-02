@@ -1,9 +1,8 @@
-# 训练示例：
-# python src/train.py --config config/svm.yaml --experiment_id svm_exp001
-#
-# 参数说明：
-# --config: YAML 配置文件路径
-# --experiment_id: 实验编号，所有输出会保存到 outputs/{experiment_id}/
+"""Train a configured skin lesion classifier and export experiment artifacts.
+
+Example:
+  python src/train.py --config config/svm.yaml --experiment_id svm_exp001
+"""
 
 import argparse
 import copy
@@ -30,6 +29,7 @@ from src.utils.io import ensure_dir, save_json
 
 
 def parse_args():
+    """Parse training options shared by all supported model backends."""
     parser = argparse.ArgumentParser(description="Train the SVM lesion classifier.")
     parser.add_argument("--config", required=True, help="Path to YAML config.")
     parser.add_argument(
@@ -51,6 +51,7 @@ def parse_args():
 
 
 def main():
+    """Run the full experiment: metadata, features, split, training, and export."""
     args = parse_args()
     config = load_config(args.config)
 
@@ -63,6 +64,7 @@ def main():
 
     output_dir = ensure_dir(Path(config["data"]["output_dir"]) / args.experiment_id)
 
+    # Feature extraction is imported dynamically so experiments can swap modules.
     features_mod = importlib.import_module(args.features_module)
     extract_feature_table = features_mod.extract_feature_table
 
@@ -74,6 +76,7 @@ def main():
     if args.reuse_features and features_path.exists():
         features_df = pd.read_csv(features_path)
     else:
+        # Cache tabular features because extraction is the slowest deterministic step.
         features_df = extract_feature_table(metadata, config)
         features_df.to_csv(features_path, index=False)
 
@@ -81,6 +84,7 @@ def main():
     split_search_cfg = config[model_name].get("split_search", {})
 
     def run_once(config_run):
+        """Train and evaluate one split configuration."""
         split_df = create_grouped_split(metadata, config_run)
         split_data = split_features(features_df, split_df)
         X_train, y_train, train_meta = split_data["train"]
@@ -97,6 +101,7 @@ def main():
 
         metrics = {}
         prediction_frames = []
+        # Evaluate each split with identical metrics for paper-ready reporting.
         for split_name, X, y, meta in [
             ("train", X_train, y_train, train_meta),
             ("val", X_val, y_val, val_meta),
@@ -119,6 +124,7 @@ def main():
         predictions = pd.concat(prediction_frames, ignore_index=True)
         test_predictions = predictions[predictions["split"] == "test"].copy()
         if not test_predictions.empty:
+            # Measure whether predictions are stable under image augmentation.
             robustness = augmentation_robustness(test_predictions)
             robustness_detail = robustness.pop("detail")
             metrics["test"]["augmentation_robustness"] = robustness

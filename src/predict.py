@@ -1,15 +1,12 @@
-# 预测示例：
-# python src/predict.py \
-#   --config config/svm.yaml \
-#   --experiment_id svm_exp001 \
-#   --image_path data/image/1.jpg \
-#   --mask_path data/mask/mask_1.jpg
-#
-# 参数说明：
-# --config: YAML 配置文件路径
-# --experiment_id: 要使用的实验编号，会读取 outputs/{experiment_id}/model.joblib
-# --image_path: 待预测图像路径
-# --mask_path: 待预测 mask 路径
+"""Predict the class of one lesion image with a saved experiment model.
+
+Example:
+  python src/predict.py \
+      --config config/svm.yaml \
+      --experiment_id svm_exp001 \
+      --image_path data/image/1.jpg \
+      --mask_path data/mask/mask_1.jpg
+"""
 
 import argparse
 import sys
@@ -28,6 +25,7 @@ from src.utils.io import ensure_dir
 
 
 def parse_args():
+    """Parse command-line arguments for single-image inference."""
     parser = argparse.ArgumentParser(description="Predict one lesion image.")
     parser.add_argument("--config", required=True, help="Path to YAML config.")
     parser.add_argument("--experiment_id", required=True, help="Experiment id.")
@@ -37,6 +35,7 @@ def parse_args():
 
 
 def main():
+    """Extract features for one lesion image and save the predicted class."""
     args = parse_args()
     config = load_config(args.config)
     output_dir = ensure_dir(Path(config["data"]["output_dir"]) / args.experiment_id)
@@ -44,6 +43,7 @@ def main():
     model = bundle["model"]
     feature_columns = bundle["feature_columns"]
 
+    # Reindex to the training-time feature schema before calling the model.
     feature_dict = extract_features(args.image_path, args.mask_path, config)
     X = pd.DataFrame([feature_dict]).reindex(columns=feature_columns, fill_value=0.0)
 

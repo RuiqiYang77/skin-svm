@@ -1,8 +1,15 @@
+"""Create leakage-free train, validation, and test splits.
+
+Samples are grouped by base lesion id so original and augmented images are
+always assigned to the same split.
+"""
+
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
 
 def create_grouped_split(df, config):
+    """Create train/val/test splits while keeping each base image group intact."""
     split_cfg = config[config["model"]]["split"]
     train_size = split_cfg.get("train_size", 0.8)
     val_size = split_cfg.get("val_size", 0.1)
@@ -27,9 +34,9 @@ def create_grouped_split(df, config):
 
     relative_val_size = val_size / (val_size + test_size)
     if relative_val_size >= 1.0:
-        # test_size 为 0，全部 temp 数据归验证集
+        # When test_size is zero, assign all temporary groups to validation.
         val_groups = temp_groups
-        test_groups = temp_groups.iloc[0:0]  # 空 DataFrame
+        test_groups = temp_groups.iloc[0:0]  # Empty DataFrame.
     else:
         val_groups, test_groups = train_test_split(
             temp_groups,
@@ -53,6 +60,7 @@ def create_grouped_split(df, config):
 
 
 def _validate_no_group_leakage(split_df):
+    """Ensure augmented versions of one lesion never cross split boundaries."""
     leakage = (
         split_df.groupby("base_id")["split"].nunique().loc[lambda values: values > 1]
     )
@@ -61,6 +69,7 @@ def _validate_no_group_leakage(split_df):
 
 
 def split_features(features_df, split_df):
+    """Attach split labels to feature rows and return model-ready partitions."""
     merged = features_df.merge(
         split_df[["image_id", "split"]],
         on="image_id",

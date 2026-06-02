@@ -1,3 +1,9 @@
+"""Build and validate metadata rows for lesion images, masks, and labels.
+
+The metadata table is the common input for feature extraction, grouped
+splitting, and augmentation-robustness evaluation.
+"""
+
 from pathlib import Path
 
 import pandas as pd
@@ -5,11 +11,13 @@ from PIL import Image
 
 
 def parse_base_id(image_id):
+    """Return the original-image identifier shared by augmented samples."""
     image_id = str(image_id)
     return image_id.replace("_aug1", "").replace("_aug2", "")
 
 
 def parse_augmentation_id(image_id):
+    """Map an image id to its augmentation tag used in grouped evaluation."""
     image_id = str(image_id)
     if image_id.endswith("_aug1"):
         return "aug1"
@@ -19,6 +27,7 @@ def parse_augmentation_id(image_id):
 
 
 def build_metadata(config):
+    """Build the sample table consumed by feature extraction and splitting."""
     data_config = config["data"]
     image_dir = Path(data_config["image_dir"])
     mask_dir = Path(data_config["mask_dir"])
@@ -49,6 +58,7 @@ def build_metadata(config):
 
 
 def validate_metadata(df, strict_groups=True):
+    """Validate image/mask files and optional augmentation group consistency."""
     errors = []
 
     for row in df.itertuples(index=False):
@@ -74,7 +84,7 @@ def validate_metadata(df, strict_groups=True):
             if "original" not in aug_ids:
                 errors.append(f"base_id={base_id} missing original image")
                 continue
-            # 检查同一数据集内增强模式一致（所有 base_id 有相同 augmentations）
+            # Require a consistent augmentation pattern across all base images.
             if "expected_aug_ids" not in dir():
                 expected_aug_ids = aug_ids
             elif aug_ids != expected_aug_ids:
