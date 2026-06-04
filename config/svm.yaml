@@ -1,9 +1,9 @@
 model: svm
 
 data:
-  image_dir: data/image
-  mask_dir: data/mask
-  label_csv: data/label.csv
+  image_dir: data/data_by_course/image
+  mask_dir: data/data_by_course/mask
+  label_csv: data/data_by_course/label.csv
   output_dir: outputs
 
 svm:
