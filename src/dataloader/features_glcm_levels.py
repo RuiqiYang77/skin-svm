@@ -1,13 +1,11 @@
 """Configurable GLCM levels + gamma preprocessing (reads gamma_value & clahe_kernel from YAML)."""
-import sys
-from src.dataloader import preprocessing_gamma
-sys.modules["src.dataloader.preprocessing"] = preprocessing_gamma
-
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from skimage import color
 from skimage.feature import graycomatrix, graycoprops, local_binary_pattern
+
+from src.dataloader import preprocessing_gamma
 from src.dataloader.features import (
     _advanced_color_features, _advanced_shape_features, _advanced_texture_features,
     _clinical_features, _color_features, _hog_features, _melanin_features,

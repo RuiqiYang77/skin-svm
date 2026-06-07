@@ -293,12 +293,7 @@ def _advanced_texture_features(image, mask, feature_cfg):
         dilated = binary_dilation(mask, iterations=3)
         border_zone = dilated & ~eroded
         if border_zone.sum() >= 50:
-            quantized = (crop_uint8 // 32).astype(np.uint8)
-            bz = crop_mask & border_zone[crop_gray.shape[0]:, crop_gray.shape[1]:] if False else (
-                # recompute in original image space for border zone
-                None
-            )
-            # Simpler: compute border-zone in full image
+            # Compute border-zone GLCM in full image
             border_full = dilated & ~eroded
             if border_full.sum() >= 50:
                 q_full = (gray_uint8 // 32).astype(np.uint8)
@@ -352,16 +347,16 @@ def _shape_features(mask):
     height = max(maxr - minr, 1)
     width = max(maxc - minc, 1)
 
-    convex = measure.regionprops(measure.label(region.convex_image.astype(np.uint8)))[0]
-    convex_perimeter = float(measure.perimeter(region.convex_image))
+    convex = measure.regionprops(measure.label(region.image_convex.astype(np.uint8)))[0]
+    convex_perimeter = float(measure.perimeter(region.image_convex))
 
     return {
         "area_ratio": area / float(mask.size),
         "perimeter": perimeter,
         "circularity": float(circularity),
         "eccentricity": float(region.eccentricity),
-        "major_axis_length": float(region.major_axis_length),
-        "minor_axis_length": float(region.minor_axis_length),
+        "major_axis_length": float(region.axis_major_length),
+        "minor_axis_length": float(region.axis_minor_length),
         "solidity": float(region.solidity),
         "extent": float(region.extent),
         "bbox_aspect_ratio": float(width / height),
@@ -407,7 +402,7 @@ def _advanced_shape_features(image, mask):
     if regions:
         region = max(regions, key=lambda r: r.area)
         result["major_minor_ratio"] = float(
-            region.major_axis_length / (region.minor_axis_length + 1e-8)
+            region.axis_major_length / (region.axis_minor_length + 1e-8)
         )
     else:
         result["major_minor_ratio"] = 0.0

@@ -1,9 +1,22 @@
+import warnings
+
 import joblib
 from sklearn.decomposition import PCA
 from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
+
+# SVC(probability=True) was deprecated in sklearn 1.9 and will be removed in 1.11.
+# The replacement is CalibratedClassifierCV(SVC(), ensemble=False), but wrapping
+# changes the GridSearchCV parameter paths (svc__C → svc__estimator__C) and the
+# internal cross-validation behaviour, which shifts model performance.
+# TODO: migrate when sklearn ≥1.11 is required.
+warnings.filterwarnings(
+    "ignore",
+    message="The `probability` parameter was deprecated",
+    category=FutureWarning,
+)
 
 
 def build_svm_pipeline(config):

@@ -12,6 +12,7 @@
 # --mask_path: 待预测 mask 路径
 
 import argparse
+import importlib
 import sys
 from pathlib import Path
 
@@ -21,7 +22,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.dataloader.features import extract_features
 from src.model.svm import load_model_bundle
 from src.utils.config import load_config
 from src.utils.io import ensure_dir
@@ -33,6 +33,11 @@ def parse_args():
     parser.add_argument("--experiment_id", required=True, help="Experiment id.")
     parser.add_argument("--image_path", required=True, help="Input image path.")
     parser.add_argument("--mask_path", required=True, help="Input mask path.")
+    parser.add_argument(
+        "--features_module",
+        default="src.dataloader.features",
+        help="Python module path for feature extraction (must match the trained model).",
+    )
     return parser.parse_args()
 
 
@@ -43,6 +48,9 @@ def main():
     bundle = load_model_bundle(output_dir / "model.joblib")
     model = bundle["model"]
     feature_columns = bundle["feature_columns"]
+
+    features_mod = importlib.import_module(args.features_module)
+    extract_features = features_mod.extract_features
 
     feature_dict = extract_features(args.image_path, args.mask_path, config)
     X = pd.DataFrame([feature_dict]).reindex(columns=feature_columns, fill_value=0.0)
