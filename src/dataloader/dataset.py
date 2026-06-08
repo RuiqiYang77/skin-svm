@@ -1,9 +1,4 @@
-"""Build and validate metadata rows for lesion images, masks, and labels.
-
-The metadata table is the common input for feature extraction, grouped
-splitting, and augmentation-robustness evaluation.
-"""
-
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -11,23 +6,20 @@ from PIL import Image
 
 
 def parse_base_id(image_id):
-    """Return the original-image identifier shared by augmented samples."""
-    image_id = str(image_id)
-    return image_id.replace("_aug1", "").replace("_aug2", "")
+    return re.sub(r"_(aug\d+)$", "", str(image_id))
 
 
 def parse_augmentation_id(image_id):
-    """Map an image id to its augmentation tag used in grouped evaluation."""
-    image_id = str(image_id)
-    if image_id.endswith("_aug1"):
-        return "aug1"
-    if image_id.endswith("_aug2"):
-        return "aug2"
+    m = str(image_id)
+    if m.endswith("_aug1"): return "aug1"
+    if m.endswith("_aug2"): return "aug2"
+    if m.endswith("_aug3"): return "aug3"
+    if m.endswith("_aug4"): return "aug4"
+    if m.endswith("_aug5"): return "aug5"
     return "original"
 
 
 def build_metadata(config):
-    """Build the sample table consumed by feature extraction and splitting."""
     data_config = config["data"]
     image_dir = Path(data_config["image_dir"])
     mask_dir = Path(data_config["mask_dir"])
@@ -58,7 +50,6 @@ def build_metadata(config):
 
 
 def validate_metadata(df, strict_groups=True):
-    """Validate image/mask files and optional augmentation group consistency."""
     errors = []
 
     for row in df.itertuples(index=False):
@@ -79,13 +70,13 @@ def validate_metadata(df, strict_groups=True):
                 )
 
     if strict_groups:
+        expected_aug_ids = None
         for base_id, group in df.groupby("base_id"):
             aug_ids = set(group["augmentation_id"])
             if "original" not in aug_ids:
                 errors.append(f"base_id={base_id} missing original image")
                 continue
-            # Require a consistent augmentation pattern across all base images.
-            if "expected_aug_ids" not in dir():
+            if expected_aug_ids is None:
                 expected_aug_ids = aug_ids
             elif aug_ids != expected_aug_ids:
                 errors.append(

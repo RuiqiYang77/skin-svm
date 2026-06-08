@@ -1,10 +1,10 @@
 model: svm
 
 data:
-  image_dir: g:/skin/skin-svm-xuanyi/data/image
-  mask_dir: g:/skin/skin-svm-xuanyi/data/mask
-  label_csv: g:/skin/skin-svm-xuanyi/data/label.csv
-  output_dir: g:/skin/skin-svm-xuanyi/outputs
+  image_dir: data/image
+  mask_dir: data/mask
+  label_csv: data/label.csv
+  output_dir: outputs
 
 svm:
   split:
